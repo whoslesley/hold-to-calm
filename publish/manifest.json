@@ -1,0 +1,9 @@
+{
+  "name": "按住",
+  "short_name": "按住",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#111210",
+  "theme_color": "#111210",
+  "icons": [{ "src": "icon.png", "sizes": "180x180", "type": "image/png" }]
+}
