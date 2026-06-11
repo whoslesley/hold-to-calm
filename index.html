@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#111210">
+<title>按住</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  html, body {
+    height: 100%;
+    height: 100dvh;
+    background: #111210;
+    overflow: hidden;
+    font-family: -apple-system, "PingFang SC", serif;
+    overscroll-behavior: none;
+  }
+  body {
+    display: grid;
+    grid-template-rows: 1fr auto 1fr auto;
+    justify-items: center;
+    align-items: center;
+    touch-action: none;
+    padding: calc(env(safe-area-inset-top) + 16px) 24px calc(env(safe-area-inset-bottom) + 28px);
+  }
+
+  #hint {
+    color: #6e6a5e;
+    font-size: 15px;
+    letter-spacing: 8px;
+    margin-left: 8px;
+    font-weight: 300;
+    transition: color 1.2s ease;
+    align-self: end;
+    padding-bottom: 11vh;
+  }
+  body.holding #hint { color: #b8b2a0; }
+
+  /* 圆 + 进度环 */
+  #wrap {
+    position: relative;
+    width: min(64vw, 280px);
+    height: min(64vw, 280px);
+  }
+  #btn {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    border: 1px solid #3e3d35;
+    background: radial-gradient(circle at 38% 32%, #1e1f1b, #131411);
+    color: #b8b2a0;
+    font-size: 21px;
+    letter-spacing: 12px;
+    text-indent: 12px;
+    font-weight: 400;
+    cursor: pointer;
+    outline: none;
+    transition: transform .25s ease, color 1s ease;
+  }
+  body.holding #btn {
+    transform: scale(.97);
+    color: transparent;
+    animation: breathe 6s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%, 100% { box-shadow: 0 0 50px 4px rgba(214, 203, 173, .07); }
+    50%      { box-shadow: 0 0 90px 22px rgba(214, 203, 173, .16); }
+  }
+  /* 外缘进度环：一圈 60 秒 */
+  #ring {
+    position: absolute;
+    inset: -7px;
+    width: calc(100% + 14px);
+    height: calc(100% + 14px);
+    transform: rotate(-90deg);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity .8s ease;
+  }
+  body.holding #ring { opacity: 1; }
+  #ring circle {
+    fill: none;
+    stroke: #c9c1aa;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+
+  #timer {
+    align-self: start;
+    padding-top: 8vh;
+    color: #8d8775;
+    font-size: 30px;
+    font-weight: 200;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 3px;
+    opacity: 0;
+    transition: opacity 1s ease;
+  }
+  body.holding #timer { opacity: 1; }
+
+  /* 声音切换 */
+  #sounds { display: flex; gap: 30px; }
+  #sounds span {
+    color: #7d7868;
+    font-size: 16px;
+    letter-spacing: 3px;
+    padding: 10px 4px;
+    cursor: pointer;
+    border-bottom: 1px solid transparent;
+    transition: color .4s, border-color .4s;
+  }
+  #sounds span.sel { color: #d6cdb3; border-bottom-color: #9b9480; }
+  body.holding #sounds { opacity: .25; transition: opacity 1s; }
+</style>
+</head>
+<body>
+
+<div id="hint">按住，别想</div>
+<div id="wrap">
+  <button id="btn">按 住</button>
+  <svg id="ring" viewBox="0 0 100 100">
+    <circle id="arc" cx="50" cy="50" r="48.5"></circle>
+  </svg>
+</div>
+<div id="timer">0:00</div>
+<div id="sounds">
+  <span data-s="brown" class="sel">沉</span>
+  <span data-s="rain">雨</span>
+  <span data-s="white">风</span>
+  <span data-s="tone">432Hz</span>
+</div>
+
+<script>
+let ctx = null, gain = null, src = null, sound = 'brown';
+
+function makeBuffer(type) {
+  const len = ctx.sampleRate * 4;
+  const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+  for (let ch = 0; ch < 2; ch++) {
+    const d = buf.getChannelData(ch);
+    let last = 0;
+    for (let i = 0; i < len; i++) {
+      const w = Math.random() * 2 - 1;
+      if (type === 'white') {
+        d[i] = w * 0.25;
+      } else {
+        last = (last + 0.02 * w) / 1.02;
+        d[i] = last * 3.5;
+      }
+    }
+  }
+  return buf;
+}
+
+function start() {
+  if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+  if (ctx.state === 'suspended') ctx.resume();
+  stopSource();
+
+  gain = ctx.createGain();
+  gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+
+  let node;
+  if (sound === 'tone') {
+    // 432Hz 纯音：正弦基频 + 极轻的八度泛音，避免过于单薄
+    src = ctx.createOscillator();
+    src.type = 'sine';
+    src.frequency.value = 432;
+    const o2 = ctx.createOscillator();
+    o2.type = 'sine';
+    o2.frequency.value = 864;
+    const g2 = ctx.createGain();
+    g2.gain.value = 0.08;
+    o2.connect(g2); g2.connect(gain);
+    o2.start();
+    src._extra = o2;
+    node = src;
+    gain.gain.exponentialRampToValueAtTime(0.22, ctx.currentTime + 0.4); // 纯音音量调低、淡入更缓
+  } else {
+    src = ctx.createBufferSource();
+    src.buffer = makeBuffer(sound);
+    src.loop = true;
+    node = src;
+    if (sound === 'rain') {
+      const hp = ctx.createBiquadFilter();
+      hp.type = 'highpass'; hp.frequency.value = 400;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 4000;
+      src.connect(hp); hp.connect(lp); node = lp;
+    } else if (sound === 'brown') {
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 500;
+      src.connect(lp); node = lp;
+    }
+    gain.gain.exponentialRampToValueAtTime(0.9, ctx.currentTime + 0.25);
+  }
+  node.connect(gain);
+  gain.connect(ctx.destination);
+  src.start();
+}
+
+function stopSource() {
+  if (src) {
+    try { src.stop(); } catch(e){}
+    if (src._extra) { try { src._extra.stop(); } catch(e){} }
+    src = null;
+  }
+}
+
+function stop() {
+  if (gain && ctx) {
+    const g = gain, s = src;
+    g.gain.cancelScheduledValues(ctx.currentTime);
+    g.gain.setValueAtTime(g.gain.value, ctx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.3);
+    setTimeout(() => {
+      try { s && s.stop(); } catch(e){}
+      if (s && s._extra) { try { s._extra.stop(); } catch(e){} }
+    }, 350);
+    src = null;
+  }
+}
+
+const btn = document.getElementById('btn');
+const hint = document.getElementById('hint');
+const timerEl = document.getElementById('timer');
+const arc = document.getElementById('arc');
+const CIRC = 2 * Math.PI * 48.5;
+arc.style.strokeDasharray = CIRC;
+arc.style.strokeDashoffset = CIRC;
+
+let holding = false, t0 = 0, raf = null;
+
+function frame() {
+  if (!holding) return;
+  const ms = Date.now() - t0;
+  const s = Math.floor(ms / 1000);
+  timerEl.textContent = `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  const p = (ms % 60000) / 60000;          // 一圈 60 秒
+  arc.style.strokeDashoffset = CIRC * (1 - p);
+  raf = requestAnimationFrame(frame);
+}
+
+function down(e) {
+  e.preventDefault();
+  if (holding) return;
+  holding = true;
+  t0 = Date.now();
+  document.body.classList.add('holding');
+  hint.textContent = '就这样待着';
+  timerEl.textContent = '0:00';
+  arc.style.strokeDashoffset = CIRC;
+  start();
+  raf = requestAnimationFrame(frame);
+}
+
+function up(e) {
+  e.preventDefault();
+  if (!holding) return;
+  holding = false;
+  document.body.classList.remove('holding');
+  stop();
+  cancelAnimationFrame(raf);
+  hint.textContent = '按住，别想';
+}
+
+btn.addEventListener('pointerdown', down);
+window.addEventListener('pointerup', up);
+window.addEventListener('pointercancel', up);
+btn.addEventListener('contextmenu', e => e.preventDefault());
+
+document.querySelectorAll('#sounds span').forEach(b => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('#sounds span').forEach(x => x.classList.remove('sel'));
+    b.classList.add('sel');
+    sound = b.dataset.s;
+  });
+});
+
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
