@@ -168,8 +168,8 @@ function makeBuffer(type) {
   return buf;
 }
 
-function unlock() {
-  // iOS：音频引擎必须在用户手势中解锁；首次按下播一个无声样本并等待 resume 完成
+function ensureCtx() {
+  // 首次按下时建引擎，并播一个无声样本（iOS 要求在用户手势里初始化）
   if (!ctx) {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     const b = ctx.createBuffer(1, 1, 22050);
@@ -177,16 +177,8 @@ function unlock() {
     s.buffer = b;
     s.connect(ctx.destination);
     s.start(0);
-    // 保险 2：引擎一旦转为 running 且仍在按住，立即出声
-    ctx.addEventListener('statechange', () => {
-      dbg.textContent = 'audio: ' + ctx.state;
-      if (ctx.state === 'running' && holding && !src) start();
-    });
+    ctx.addEventListener('statechange', dshow);
   }
-  if (ctx.state !== 'running') {
-    return ctx.resume().catch(() => {});
-  }
-  return Promise.resolve();
 }
 
 function start() {
@@ -262,6 +254,10 @@ const hint = document.getElementById('hint');
 const timerEl = document.getElementById('timer');
 const arc = document.getElementById('arc');
 const dbg = document.getElementById('dbg');
+const VER = 'v5';
+// 版本号+引擎状态常驻显示：手机上看不到 v4 就说明还在跑旧缓存
+function dshow() { dbg.textContent = VER + ' · audio: ' + (ctx ? ctx.state : 'none'); }
+dshow();
 const CIRC = 2 * Math.PI * 48.5;
 arc.style.strokeDasharray = CIRC;
 arc.style.strokeDashoffset = CIRC;
@@ -275,8 +271,21 @@ function frame() {
   timerEl.textContent = `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
   const p = (ms % 60000) / 60000;          // 一圈 60 秒
   arc.style.strokeDashoffset = CIRC * (1 - p);
-  dbg.textContent = 'audio: ' + (ctx ? ctx.state : 'none');
+  dshow();
   raf = requestAnimationFrame(frame);
+}
+
+let wakeTimer = null;
+
+// 边按边催：只要还按着且引擎没真醒，就反复 resume；一醒就放声
+function pump() {
+  if (!holding) return;
+  if (ctx.state === 'running') {
+    if (!src) start();          // 确认真醒了才放声
+  } else {
+    ctx.resume().catch(() => {}); // 还没醒，催一次
+    wakeTimer = setTimeout(pump, 200);
+  }
 }
 
 function down(e) {
@@ -288,7 +297,8 @@ function down(e) {
   hint.textContent = '就这样待着';
   timerEl.textContent = '0:00';
   arc.style.strokeDashoffset = CIRC;
-  unlock().then(() => { if (holding && !src) start(); }); // 保险 1：按下时尝试解锁
+  ensureCtx();
+  pump();
   raf = requestAnimationFrame(frame);
 }
 
@@ -297,11 +307,10 @@ function up(e) {
   if (!holding) return;
   holding = false;
   document.body.classList.remove('holding');
+  clearTimeout(wakeTimer);
   stop();
   cancelAnimationFrame(raf);
   hint.textContent = '按住，别想';
-  // 保险 3：松开（touchend）是 iOS 确定认可的解锁手势，兜底解锁给下一次用
-  if (ctx && ctx.state !== 'running') ctx.resume().catch(() => {});
 }
 
 btn.addEventListener('pointerdown', down);
