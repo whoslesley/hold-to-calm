@@ -19,14 +19,64 @@
     font-family: -apple-system, "PingFang SC", serif;
     overscroll-behavior: none;
   }
-  body {
+  body { position: relative; touch-action: none; }
+
+  /* 两屏通用：铺满、叠放 */
+  .screen {
+    position: absolute;
+    inset: 0;
+    transition: opacity .8s ease;
+  }
+
+  /* Step 1 — 选声音入口屏 */
+  #s1 {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(28px, 5vh, 44px);
+    padding: calc(env(safe-area-inset-top) + 16px) 24px calc(env(safe-area-inset-bottom) + 28px);
+  }
+  #s1 .lead {
+    color: #6e6a5e;
+    font-size: 15px;
+    letter-spacing: 6px;
+    margin-left: 6px;
+    font-weight: 300;
+  }
+  #s1 .opts {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: min(62vw, 240px);
+  }
+  #s1 .opt {
+    text-align: center;
+    color: #b8b2a0;
+    font-size: 21px;
+    letter-spacing: 9px;
+    text-indent: 9px;
+    font-weight: 300;
+    padding: 18px;
+    border: 1px solid #34332d;
+    border-radius: 18px;
+    cursor: pointer;
+    transition: border-color .3s, color .3s;
+  }
+  #s1 .opt:active { border-color: #9b9480; color: #e6dfca; }
+  #s1 .opt[data-s="tone"] { font-size: 18px; letter-spacing: 4px; text-indent: 4px; }
+
+  /* Step 2 — 按住屏（沿用原布局） */
+  #s2 {
     display: grid;
     grid-template-rows: 1fr auto 1fr auto;
     justify-items: center;
     align-items: center;
-    touch-action: none;
     padding: calc(env(safe-area-inset-top) + 16px) 24px calc(env(safe-area-inset-bottom) + 28px);
+    opacity: 0;
+    visibility: hidden;
   }
+  #s2.show { opacity: 1; visibility: visible; }
 
   #hint {
     color: #6e6a5e;
@@ -130,20 +180,35 @@
 </head>
 <body>
 
-<div id="hint">按住，别想</div>
-<div id="wrap">
-  <button id="btn">按 住</button>
-  <svg id="ring" viewBox="0 0 100 100">
-    <circle id="arc" cx="50" cy="50" r="48.5"></circle>
-  </svg>
-</div>
-<div id="timer">0:00</div>
 <div id="dbg"></div>
-<div id="sounds">
-  <span data-s="brown" class="sel">沉</span>
-  <span data-s="rain">雨</span>
-  <span data-s="white">风</span>
-  <span data-s="tone">432Hz</span>
+
+<!-- Step 1：选声音 -->
+<div id="s1" class="screen">
+  <div class="lead">选一种声音</div>
+  <div class="opts">
+    <div class="opt" data-s="brown">沉</div>
+    <div class="opt" data-s="rain">雨</div>
+    <div class="opt" data-s="white">风</div>
+    <div class="opt" data-s="tone">432Hz</div>
+  </div>
+</div>
+
+<!-- Step 2：按住 -->
+<div id="s2" class="screen">
+  <div id="hint">按住，别想</div>
+  <div id="wrap">
+    <button id="btn">按 住</button>
+    <svg id="ring" viewBox="0 0 100 100">
+      <circle id="arc" cx="50" cy="50" r="48.5"></circle>
+    </svg>
+  </div>
+  <div id="timer">0:00</div>
+  <div id="sounds">
+    <span data-s="brown" class="sel">沉</span>
+    <span data-s="rain">雨</span>
+    <span data-s="white">风</span>
+    <span data-s="tone">432Hz</span>
+  </div>
 </div>
 
 <script>
@@ -168,8 +233,9 @@ function makeBuffer(type) {
   return buf;
 }
 
-function ensureCtx() {
-  // 首次按下时建引擎，并播一个无声样本（iOS 要求在用户手势里初始化）
+function unlockAudio() {
+  // Step1 的点选是一次"完整点按"——iOS 唯一认可的解锁手势。
+  // 在这里建引擎、播无声样本并 resume，音频从此点亮。
   if (!ctx) {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     const b = ctx.createBuffer(1, 1, 22050);
@@ -179,6 +245,7 @@ function ensureCtx() {
     s.start(0);
     ctx.addEventListener('statechange', dshow);
   }
+  if (ctx.state !== 'running') ctx.resume().catch(() => {});
 }
 
 function start() {
@@ -254,8 +321,10 @@ const hint = document.getElementById('hint');
 const timerEl = document.getElementById('timer');
 const arc = document.getElementById('arc');
 const dbg = document.getElementById('dbg');
-const VER = 'v5';
-// 版本号+引擎状态常驻显示：手机上看不到 v4 就说明还在跑旧缓存
+const s1 = document.getElementById('s1');
+const s2 = document.getElementById('s2');
+const VER = 'v6';
+// 版本号+引擎状态常驻显示：手机上看不到该版本号就说明还在跑旧缓存
 function dshow() { dbg.textContent = VER + ' · audio: ' + (ctx ? ctx.state : 'none'); }
 dshow();
 const CIRC = 2 * Math.PI * 48.5;
@@ -279,7 +348,7 @@ let wakeTimer = null;
 
 // 边按边催：只要还按着且引擎没真醒，就反复 resume；一醒就放声
 function pump() {
-  if (!holding) return;
+  if (!holding || !ctx) return;
   if (ctx.state === 'running') {
     if (!src) start();          // 确认真醒了才放声
   } else {
@@ -297,8 +366,7 @@ function down(e) {
   hint.textContent = '就这样待着';
   timerEl.textContent = '0:00';
   arc.style.strokeDashoffset = CIRC;
-  ensureCtx();
-  pump();
+  pump();  // 音频已在 Step1 解锁；pump 仅作兜底
   raf = requestAnimationFrame(frame);
 }
 
@@ -323,6 +391,24 @@ document.querySelectorAll('#sounds span').forEach(b => {
     document.querySelectorAll('#sounds span').forEach(x => x.classList.remove('sel'));
     b.classList.add('sel');
     sound = b.dataset.s;
+  });
+});
+
+// Step 1：选声音 → 点亮音频 → 进入 Step 2
+function markSel() {
+  document.querySelectorAll('#sounds span').forEach(x =>
+    x.classList.toggle('sel', x.dataset.s === sound));
+}
+document.querySelectorAll('#s1 .opt').forEach(o => {
+  o.addEventListener('click', () => {
+    sound = o.dataset.s;
+    markSel();
+    unlockAudio();
+    s1.style.opacity = '0';
+    setTimeout(() => {
+      s1.style.display = 'none';
+      s2.classList.add('show');
+    }, 800);
   });
 });
 

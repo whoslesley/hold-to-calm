@@ -1,4 +1,4 @@
-const C = 'anzhu-v5';
+const C = 'anzhu-v6';
 const FILES = ['.', 'index.html', 'manifest.json', 'icon.png'];
 self.addEventListener('install', e => {
   self.skipWaiting(); // 新版本立即接管，不再需要"重开两次"
